@@ -13,7 +13,7 @@ A Yelp-style restaurant discovery and review platform built with **FastAPI**, **
 | ORM | SQLAlchemy |
 | Authentication | JWT (python-jose) |
 | Password Hashing | bcrypt (passlib) |
-| AI Chatbot | LangChain + OpenAI + Tavily |
+| AI Chatbot | LangChain + Ollama (Llama 3.2) + Tavily |
 | Frontend | ReactJS (coming soon) |
 | API Docs | Swagger UI (built-in) |
 
@@ -44,17 +44,20 @@ yelp-prototype/
 │   │   │   ├── restaurants.py
 │   │   │   ├── reviews.py
 │   │   │   ├── favorites.py
-│   │   │   └── owner.py
+│   │   │   ├── owner.py
+│   │   │   └── ai_assistant.py
 │   │   ├── schemas/              # Pydantic request/response models
 │   │   │   ├── user.py
 │   │   │   ├── preference.py
 │   │   │   ├── restaurant.py
 │   │   │   ├── review.py
 │   │   │   ├── favorite.py
-│   │   │   └── owner.py
+│   │   │   ├── owner.py
+│   │   │   └── chat.py
 │   │   └── services/             # Business logic
 │   │       ├── auth.py           # Password hashing & JWT
-│   │       └── dependencies.py   # get_current_user, get_current_owner
+│   │       ├── dependencies.py   # get_current_user, get_current_owner
+│   │       └── ai_service.py     # AI chatbot (Ollama + Tavily)
 │   ├── uploads/                  # Uploaded images (gitignored)
 │   ├── .env                      # Environment variables (gitignored)
 │   ├── .gitignore
@@ -68,6 +71,8 @@ yelp-prototype/
 
 - Python 3.12+
 - MySQL 8.0+
+- [Ollama](https://ollama.com) installed and running locally
+- Llama 3.2 pulled: `ollama pull llama3.2`
 - Node.js (for frontend, coming soon)
 
 ---
@@ -77,7 +82,7 @@ yelp-prototype/
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/your-username/yelp-prototype.git
+git clone https://github.com/sai-sushma-maddali/yelp-prototype.git
 cd yelp-prototype
 ```
 
@@ -90,14 +95,8 @@ python -m venv venv
 
 Activate the virtual environment:
 
-- **Mac/Linux:**
-```bash
-source venv/bin/activate
-```
-- **Windows:**
-```bash
-venv\Scripts\activate
-```
+- **Mac/Linux:** `source venv/bin/activate`
+- **Windows:** `venv\Scripts\activate`
 
 Install dependencies:
 ```bash
@@ -119,40 +118,49 @@ SECRET_KEY=your_super_secret_key_change_this
 ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=1440
 
-OPENAI_API_KEY=your_openai_key_here
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=llama3.2:latest
 TAVILY_API_KEY=your_tavily_key_here
 ```
 
 
-### 4. Set Up the Database
 
-Create the database in MySQL:
+### 4. Start Ollama
+
+```bash
+ollama serve
+```
+
+Verify the model is available:
+```bash
+ollama list
+# should show llama3.2:latest
+```
+
+If not, pull it:
+```bash
+ollama pull llama3.2
+```
+
+### 5. Set Up the Database
 
 ```sql
 CREATE DATABASE yelp_db;
 ```
 
-Then initialize all tables:
-
+Initialize all tables:
 ```bash
 python -m app.init_db
 ```
 
-You should see:
-```
-Creating tables...
-Done!
-```
-
-### 5. Run the Server
+### 6. Run the Server
 
 ```bash
 uvicorn app.main:app --reload
 ```
 
-The API will be available at:
 - **API Base URL:** http://localhost:8000
-- **Swagger UI (API Docs):** http://localhost:8000/docs
+- **Swagger UI:** http://localhost:8000/docs
 
 ---
 
@@ -211,11 +219,59 @@ The API will be available at:
 | GET | `/owner/dashboard/{id}` | Analytics dashboard |
 | GET | `/owner/claims` | View my claims |
 
+### AI Assistant
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/ai-assistant/chat` | Chat with the AI restaurant assistant |
+
+---
+
+## AI Assistant
+
+The AI chatbot is powered by **Ollama (Llama 3.2)** running locally and **Tavily** for real-time web search.
+
+### How it works
+1. User sends a natural language message e.g. *"I want vegan food tonight"*
+2. Ollama extracts search filters from the message (cuisine, price, keywords, city)
+3. The app searches the restaurant database using those filters
+4. Tavily adds real-world web context (if API key is configured)
+5. Ollama generates a personalised, conversational response
+6. Restaurant cards are returned alongside the text response
+
+### Example request
+```json
+POST /ai-assistant/chat
+{
+  "message": "Something romantic for an anniversary dinner",
+  "conversation_history": []
+}
+```
+
+### Example response
+```json
+{
+  "response": "For a romantic anniversary dinner, I recommend Candlelight Bistro...",
+  "restaurants": [
+    {
+      "id": 3,
+      "name": "Candlelight Bistro",
+      "cuisine_type": "French",
+      "price_tier": "$$$",
+      "avg_rating": 4.8
+    }
+  ],
+  "filters_used": {
+    "keywords": "romantic",
+    "sort_by": "rating"
+  }
+}
+```
+
 ---
 
 ## Authentication
 
-This project uses **JWT Bearer tokens**. To access protected endpoints:
+This project uses **JWT Bearer tokens**:
 
 1. Call `POST /auth/login` with your credentials
 2. Copy the `access_token` from the response
@@ -225,8 +281,6 @@ This project uses **JWT Bearer tokens**. To access protected endpoints:
 ---
 
 ## Database Schema
-
-The following tables are created automatically by `init_db.py`:
 
 | Table | Description |
 |-------|-------------|
@@ -241,9 +295,7 @@ The following tables are created automatically by `init_db.py`:
 
 ---
 
-## Testing the API
-
-**Quick test accounts:**
+## Test Accounts
 
 | Role | Email | Password |
 |------|-------|----------|
@@ -252,30 +304,17 @@ The following tables are created automatically by `init_db.py`:
 
 ---
 
-## Search & Filter
+## Restaurant Search Parameters
 
-The `GET /restaurants` endpoint supports the following query parameters:
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `name` | string | Search by restaurant name |
-| `cuisine_type` | string | Filter by cuisine |
-| `city` | string | Filter by city |
-| `zip_code` | string | Filter by zip code |
-| `price_tier` | string | Filter by price ($, $$, $$$, $$$$) |
-| `keywords` | string | Search in description and amenities |
-| `skip` | int | Pagination offset (default: 0) |
-| `limit` | int | Results per page (default: 10) |
-
----
-
-## AI Assistant (Coming Soon)
-
-The AI chatbot feature will use:
-- **LangChain** for natural language understanding
-- **OpenAI** for generating responses
-- **Tavily** for real-time web search
-- User preferences loaded from the database for personalized recommendations
+| Parameter | Description |
+|-----------|-------------|
+| `name` | Search by name |
+| `cuisine_type` | Filter by cuisine |
+| `city` | Filter by city |
+| `zip_code` | Filter by zip |
+| `price_tier` | Filter by price ($–$$$$) |
+| `keywords` | Search in description/amenities |
+| `skip` / `limit` | Pagination |
 
 ---
 
@@ -290,38 +329,14 @@ The AI chatbot feature will use:
 - [x] Favorites & user history
 - [x] Restaurant owner features
 - [x] Owner analytics dashboard
-- [ ] AI Assistant chatbot
+- [x] AI Assistant chatbot (Ollama + Tavily)
 - [ ] Restaurant photo uploads
 - [ ] React frontend
 - [ ] Deployment
 
 ---
 
-## Dependencies
-
-Key packages (see `requirements.txt` for full list):
-
-```
-fastapi
-uvicorn
-sqlalchemy
-pymysql
-python-dotenv
-passlib[bcrypt]
-python-jose[cryptography]
-python-multipart
-pillow
-langchain
-langchain-openai
-tavily-python
-pydantic[email]
-```
-
----
-
 ## .gitignore
-
-Make sure your `.gitignore` includes:
 
 ```
 venv/
