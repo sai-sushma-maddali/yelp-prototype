@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
+import shutil
+import uuid
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from typing import Optional
@@ -10,6 +12,7 @@ from app.schemas.restaurant import (
     RestaurantResponse, RestaurantListResponse
 )
 from app.services.dependencies import get_current_user
+import os
 
 router = APIRouter(prefix="/restaurants", tags=["Restaurants"])
 
@@ -163,3 +166,134 @@ def get_my_restaurants(
         Restaurant.owner_id == current_user.id
     ).all()
     return RestaurantListResponse(total=len(restaurants), restaurants=restaurants)
+
+# --- Upload Restaurant Photo ---
+@router.post("/{restaurant_id}/photos", status_code=status.HTTP_201_CREATED)
+def upload_restaurant_photo(
+    restaurant_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # Check restaurant exists
+    restaurant = db.query(Restaurant).filter(
+        Restaurant.id == restaurant_id
+    ).first()
+    if not restaurant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Restaurant not found"
+        )
+
+    # Check ownership
+    if restaurant.owner_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the restaurant owner can upload photos"
+        )
+
+    # Validate file extension
+    filename_lower = file.filename.lower()
+    allowed_extensions = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif']
+    if not any(filename_lower.endswith(ext) for ext in allowed_extensions):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only image files are allowed"
+        )
+
+    # Save file
+    upload_dir = f"uploads/restaurant_photos/{restaurant_id}"
+    os.makedirs(upload_dir, exist_ok=True)
+    ext = file.filename.split(".")[-1].lower()
+    filename = f"{uuid.uuid4()}.{ext}"
+    file_path = os.path.join(upload_dir, filename)
+
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    # Save to DB
+    from app.models.restaurant_photo import RestaurantPhoto
+    photo = RestaurantPhoto(
+        restaurant_id=restaurant_id,
+        photo_url="/" + file_path.replace("\\", "/")
+    )
+    db.add(photo)
+    db.commit()
+    db.refresh(photo)
+
+    return {
+        "id": photo.id,
+        "restaurant_id": photo.restaurant_id,
+        "photo_url": photo.photo_url
+    }
+
+
+# --- Get Restaurant Photos ---
+@router.get("/{restaurant_id}/photos")
+def get_restaurant_photos(
+    restaurant_id: int,
+    db: Session = Depends(get_db)
+):
+    restaurant = db.query(Restaurant).filter(
+        Restaurant.id == restaurant_id
+    ).first()
+    if not restaurant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Restaurant not found"
+        )
+
+    from app.models.restaurant_photo import RestaurantPhoto
+    photos = db.query(RestaurantPhoto).filter(
+        RestaurantPhoto.restaurant_id == restaurant_id
+    ).all()
+
+    return [
+        {"id": p.id, "photo_url": p.photo_url, "restaurant_id": p.restaurant_id}
+        for p in photos
+    ]
+
+
+# --- Delete Restaurant Photo ---
+@router.delete("/{restaurant_id}/photos/{photo_id}", status_code=status.HTTP_200_OK)
+def delete_restaurant_photo(
+    restaurant_id: int,
+    photo_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    restaurant = db.query(Restaurant).filter(
+        Restaurant.id == restaurant_id
+    ).first()
+    if not restaurant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Restaurant not found"
+        )
+
+    if restaurant.owner_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the restaurant owner can delete photos"
+        )
+
+    from app.models.restaurant_photo import RestaurantPhoto
+    photo = db.query(RestaurantPhoto).filter(
+        RestaurantPhoto.id == photo_id,
+        RestaurantPhoto.restaurant_id == restaurant_id
+    ).first()
+
+    if not photo:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Photo not found"
+        )
+
+    # Delete file from disk
+    file_path = photo.photo_url.lstrip("/")
+    if os.path.exists(file_path):
+        os.remove(file_path)
+
+    db.delete(photo)
+    db.commit()
+    return {"message": "Photo deleted successfully"}

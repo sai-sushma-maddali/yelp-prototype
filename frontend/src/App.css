@@ -1,0 +1,181 @@
+/* ── Global Styles ── */
+body {
+  background-color: #f8f9fa;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+/* ── Navbar ── */
+.navbar-brand {
+  font-weight: 700;
+  font-size: 1.5rem;
+  color: #d32323 !important;
+}
+
+.navbar-brand span {
+  color: #333;
+}
+
+/* ── Restaurant Cards ── */
+.restaurant-card {
+  transition: transform 0.2s, box-shadow 0.2s;
+  border: none;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+
+.restaurant-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+  cursor: pointer;
+}
+
+.restaurant-card .card-img-top {
+  border-radius: 12px 12px 0 0;
+  height: 180px;
+  object-fit: cover;
+  background-color: #e9ecef;
+}
+
+/* ── Star Rating ── */
+.star-rating .star {
+  color: #ccc;
+  font-size: 1.2rem;
+}
+
+.star-rating .star.filled {
+  color: #f5a623;
+}
+
+/* ── Price Tier ── */
+.price-tier {
+  color: #2d6a4f;
+  font-weight: 600;
+}
+
+/* ── Hero Section ── */
+.hero-section {
+  background: linear-gradient(135deg, #d32323 0%, #ff6b6b 100%);
+  color: white;
+  padding: 60px 0;
+  margin-bottom: 40px;
+}
+
+.hero-section h1 {
+  font-size: 2.5rem;
+  font-weight: 700;
+}
+
+/* ── AI Chatbot ── */
+.chat-container {
+  height: 420px;
+  overflow-y: auto;
+  border: 1px solid #dee2e6;
+  border-radius: 12px;
+  padding: 16px;
+  background: #fff;
+}
+
+.chat-message-user {
+  background: #d32323;
+  color: white;
+  padding: 10px 14px;
+  border-radius: 18px 18px 4px 18px;
+  margin-left: auto;
+  max-width: 75%;
+  margin-bottom: 10px;
+}
+
+.chat-message-ai {
+  background: #f1f3f5;
+  color: #333;
+  padding: 10px 14px;
+  border-radius: 18px 18px 18px 4px;
+  max-width: 85%;
+  margin-bottom: 10px;
+}
+
+.chat-thinking {
+  color: #aaa;
+  font-style: italic;
+  font-size: 0.9rem;
+}
+
+/* ── Forms ── */
+.auth-card {
+  max-width: 460px;
+  margin: 60px auto;
+  border-radius: 16px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+  border: none;
+}
+
+/* ── Profile ── */
+.profile-pic {
+  width: 100px;
+  height: 100px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 3px solid #d32323;
+}
+
+.profile-pic-placeholder {
+  width: 100px;
+  height: 100px;
+  border-radius: 50%;
+  background: #d32323;
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2rem;
+  font-weight: 700;
+}
+
+/* ── Badges ── */
+.cuisine-badge {
+  background-color: #fff3cd;
+  color: #856404;
+  border: 1px solid #ffc107;
+  border-radius: 20px;
+  padding: 3px 10px;
+  font-size: 0.8rem;
+}
+
+.amenity-badge {
+  background-color: #e8f5e9;
+  color: #2d6a4f;
+  border: 1px solid #a5d6a7;
+  border-radius: 20px;
+  padding: 3px 10px;
+  font-size: 0.8rem;
+  margin: 2px;
+}
+
+/* ── Favorite Button ── */
+.favorite-btn {
+  background: none;
+  border: none;
+  font-size: 1.4rem;
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+
+.favorite-btn:hover {
+  transform: scale(1.2);
+}
+
+/* ── Page Headers ── */
+.page-header {
+  background: white;
+  padding: 20px 0;
+  border-bottom: 1px solid #dee2e6;
+  margin-bottom: 30px;
+}
+
+/* ── Loading Spinner ── */
+.loading-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 300px;
+}

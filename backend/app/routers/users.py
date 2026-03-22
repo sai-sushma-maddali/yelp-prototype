@@ -46,16 +46,20 @@ def upload_profile_picture(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # Validate file type
-    allowed_types = ["image/jpeg", "image/png", "image/jpg", "image/webp"]
-    if file.content_type not in allowed_types:
+    # Print for debugging
+    print(f"Uploaded file: {file.filename}, content_type: {file.content_type}")
+
+    # Validate by file extension (more reliable than content_type)
+    filename_lower = file.filename.lower()
+    allowed_extensions = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif']
+    if not any(filename_lower.endswith(ext) for ext in allowed_extensions):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only JPEG, PNG, and WebP images are allowed"
+            detail="Only JPEG, PNG, WebP, GIF and AVIF images are allowed"
         )
 
     # Generate unique filename
-    ext = file.filename.split(".")[-1]
+    ext = file.filename.split(".")[-1].lower()
     filename = f"{uuid.uuid4()}.{ext}"
     file_path = os.path.join(UPLOAD_DIR, filename)
 
