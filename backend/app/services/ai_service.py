@@ -1,5 +1,5 @@
 from langchain_ollama import ChatOllama
-from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_tavily import TavilySearch
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from sqlalchemy.orm import Session
 from app.models.user_preference import UserPreference
@@ -25,7 +25,7 @@ llm = ChatOllama(
 search_tool = None
 if TAVILY_API_KEY:
     os.environ["TAVILY_API_KEY"] = TAVILY_API_KEY
-    search_tool = TavilySearchResults(max_results=3)
+    search_tool = TavilySearch(max_results=3)
 
 
 def get_user_preferences(user_id: int, db: Session) -> dict:

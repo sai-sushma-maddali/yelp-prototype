@@ -6,6 +6,11 @@ from app.models.restaurant import Restaurant
 from app.models.user import User
 from app.schemas.review import ReviewCreate, ReviewUpdate, ReviewResponse
 from app.services.dependencies import get_current_user
+from app.services.kafka_producer import (
+    publish_review_created,
+    publish_review_updated,
+    publish_review_deleted
+)
 from typing import List
 
 router = APIRouter(tags=["Reviews"])
@@ -23,7 +28,6 @@ def create_review(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # Check restaurant exists
     restaurant = db.query(Restaurant).filter(
         Restaurant.id == restaurant_id
     ).first()
@@ -33,7 +37,6 @@ def create_review(
             detail="Restaurant not found"
         )
 
-    # Check if user already reviewed this restaurant
     existing_review = db.query(Review).filter(
         Review.user_id == current_user.id,
         Review.restaurant_id == restaurant_id
@@ -44,7 +47,6 @@ def create_review(
             detail="You have already reviewed this restaurant"
         )
 
-    # Create review
     review = Review(
         user_id=current_user.id,
         restaurant_id=restaurant_id,
@@ -53,7 +55,6 @@ def create_review(
     )
     db.add(review)
 
-    # Update restaurant avg_rating and review_count
     all_reviews = db.query(Review).filter(
         Review.restaurant_id == restaurant_id
     ).all()
@@ -68,7 +69,15 @@ def create_review(
     db.commit()
     db.refresh(review)
 
-    # Add user name to response
+    # Publish to Kafka
+    publish_review_created(
+        review_id=review.id,
+        user_id=current_user.id,
+        restaurant_id=restaurant_id,
+        rating=payload.rating,
+        comment=payload.comment
+    )
+
     response = ReviewResponse.model_validate(review)
     response.user_name = current_user.name
     return response
@@ -128,7 +137,6 @@ def update_review(
             detail="Review not found"
         )
 
-    # Only the author can edit
     if review.user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -141,7 +149,6 @@ def update_review(
 
     db.commit()
 
-    # Recalculate avg rating
     restaurant = db.query(Restaurant).filter(
         Restaurant.id == restaurant_id
     ).first()
@@ -154,6 +161,15 @@ def update_review(
         )
     db.commit()
     db.refresh(review)
+
+    # Publish to Kafka
+    publish_review_updated(
+        review_id=review.id,
+        user_id=current_user.id,
+        restaurant_id=restaurant_id,
+        rating=review.rating,
+        comment=review.comment
+    )
 
     response = ReviewResponse.model_validate(review)
     response.user_name = current_user.name
@@ -182,7 +198,6 @@ def delete_review(
             detail="Review not found"
         )
 
-    # Only the author can delete
     if review.user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -191,7 +206,6 @@ def delete_review(
 
     db.delete(review)
 
-    # Recalculate avg rating and count
     restaurant = db.query(Restaurant).filter(
         Restaurant.id == restaurant_id
     ).first()
@@ -206,6 +220,12 @@ def delete_review(
     ) if remaining_reviews else 0.0
 
     db.commit()
+
+    # Publish to Kafka
+    publish_review_deleted(
+        review_id=review_id,
+        restaurant_id=restaurant_id
+    )
     return {"message": "Review deleted successfully"}
 
 

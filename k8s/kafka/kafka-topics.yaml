@@ -1,0 +1,28 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kafka-topics-creator
+  namespace: default
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: kafka-topics
+        image: confluentinc/cp-kafka:7.4.0
+        command:
+        - /bin/bash
+        - -c
+        - |
+          echo "Waiting for Kafka to be ready..."
+          sleep 30
+          kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic review.created --partitions 1 --replication-factor 1
+          kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic review.updated --partitions 1 --replication-factor 1
+          kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic review.deleted --partitions 1 --replication-factor 1
+          kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic restaurant.created --partitions 1 --replication-factor 1
+          kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic restaurant.updated --partitions 1 --replication-factor 1
+          kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic restaurant.claimed --partitions 1 --replication-factor 1
+          kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic user.created --partitions 1 --replication-factor 1
+          kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic user.updated --partitions 1 --replication-factor 1
+          echo "All topics created!"
+          kafka-topics --list --bootstrap-server kafka:9092

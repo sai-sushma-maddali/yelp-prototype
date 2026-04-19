@@ -2,11 +2,12 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import auth, users, restaurants, reviews, favorites, owner, ai_assistant
+from app.mongodb import connect_to_mongo, close_mongo_connection
+from app.services.kafka_consumer import start_all_workers
 import os
 
 app = FastAPI(title="Yelp Prototype API", version="1.0.0")
 
-# ── CORS — allow React frontend to talk to FastAPI ──
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
@@ -15,6 +16,16 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["*"]
 )
+
+@app.on_event("startup")
+async def startup_db():
+    await connect_to_mongo()
+    # Start Kafka worker services in background
+    start_all_workers()
+
+@app.on_event("shutdown")
+async def shutdown_db():
+    await close_mongo_connection()
 
 os.makedirs("uploads", exist_ok=True)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")

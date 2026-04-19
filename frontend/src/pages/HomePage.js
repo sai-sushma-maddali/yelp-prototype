@@ -1,97 +1,72 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Container, Row, Col, Form, Button,
   InputGroup, Spinner, Alert
 } from 'react-bootstrap';
 import { FaSearch, FaFilter } from 'react-icons/fa';
+import { useDispatch, useSelector } from 'react-redux';
+import {
+  fetchRestaurants, setFilters, clearFilters,
+  selectRestaurants, selectRestaurantTotal,
+  selectRestaurantLoading, selectRestaurantError,
+  selectFilters
+} from '../store/slices/restaurantSlice';
+import {
+  fetchFavorites, toggleFavorite,
+  selectFavoriteIds
+} from '../store/slices/favoriteSlice';
 import { useAuth } from '../context/AuthContext';
-import { getRestaurants, addFavorite, removeFavorite, getMyFavorites } from '../services/api';
 import RestaurantCard from '../components/RestaurantCard';
 import AIChatbot from '../components/AIChatbot';
 
+const LIMIT = 9;
+
 function HomePage() {
-  const { user }                          = useAuth();
-  const [restaurants, setRestaurants]     = useState([]);
-  const [favorites, setFavorites]         = useState([]);
-  const [loading, setLoading]             = useState(true);
-  const [error, setError]                 = useState('');
-  const [totalCount, setTotalCount]       = useState(0);
+  const dispatch    = useDispatch();
+  const { user }    = useAuth();
+  const restaurants = useSelector(selectRestaurants);
+  const total       = useSelector(selectRestaurantTotal);
+  const loading     = useSelector(selectRestaurantLoading);
+  const error       = useSelector(selectRestaurantError);
+  const filters     = useSelector(selectFilters);
+  const favoriteIds = useSelector(selectFavoriteIds);
+  const [search, setSearch] = useState('');
 
-  // Search & filter state
-  const [search, setSearch]               = useState('');
-  const [cuisineFilter, setCuisineFilter] = useState('');
-  const [priceFilter, setPriceFilter]     = useState('');
-  const [cityFilter, setCityFilter]       = useState('');
-  const [page, setPage]                   = useState(0);
-  const LIMIT = 9;
+  useEffect(() => {
+    dispatch(fetchRestaurants({
+      skip:  filters.page * LIMIT,
+      limit: LIMIT,
+      ...(filters.name         && { name:         filters.name }),
+      ...(filters.cuisine_type && { cuisine_type: filters.cuisine_type }),
+      ...(filters.price_tier   && { price_tier:   filters.price_tier }),
+      ...(filters.city         && { city:          filters.city }),
+    }));
+  }, [dispatch, filters]);
 
-  const fetchRestaurants = useCallback(async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const params = {
-        skip: page * LIMIT,
-        limit: LIMIT,
-        ...(search       && { name: search }),
-        ...(cuisineFilter && { cuisine_type: cuisineFilter }),
-        ...(priceFilter   && { price_tier: priceFilter }),
-        ...(cityFilter    && { city: cityFilter }),
-      };
-      const res = await getRestaurants(params);
-      setRestaurants(res.data.restaurants);
-      setTotalCount(res.data.total);
-    } catch {
-      setError('Failed to load restaurants. Is the backend running?');
-    } finally {
-      setLoading(false);
-    }
-  }, [search, cuisineFilter, priceFilter, cityFilter, page]);
-
-  const fetchFavorites = useCallback(async () => {
-    if (!user) return;
-    try {
-      const res = await getMyFavorites();
-      setFavorites(res.data.map(f => f.restaurant_id));
-    } catch { /* not logged in */ }
-  }, [user]);
-
-  useEffect(() => { fetchRestaurants(); }, [fetchRestaurants]);
-  useEffect(() => { fetchFavorites(); }, [fetchFavorites]);
+  useEffect(() => {
+    if (user) dispatch(fetchFavorites());
+  }, [dispatch, user]);
 
   const handleSearch = (e) => {
     e.preventDefault();
-    setPage(0);
-    fetchRestaurants();
+    dispatch(setFilters({ name: search, page: 0 }));
   };
 
   const handleClearFilters = () => {
     setSearch('');
-    setCuisineFilter('');
-    setPriceFilter('');
-    setCityFilter('');
-    setPage(0);
+    dispatch(clearFilters());
   };
 
-  const handleToggleFavorite = async (restaurantId) => {
+  const handleToggleFavorite = (restaurantId) => {
     if (!user) return;
-    try {
-      if (favorites.includes(restaurantId)) {
-        await removeFavorite(restaurantId);
-        setFavorites(prev => prev.filter(id => id !== restaurantId));
-      } else {
-        await addFavorite(restaurantId);
-        setFavorites(prev => [...prev, restaurantId]);
-      }
-    } catch (err) {
-      console.error('Favorite toggle error:', err);
-    }
+    const isFav = favoriteIds.includes(restaurantId);
+    dispatch(toggleFavorite({ restaurantId, isFavorite: isFav }));
   };
 
-  const totalPages = Math.ceil(totalCount / LIMIT);
+  const totalPages = Math.ceil(total / LIMIT);
 
   return (
     <>
-      {/* Hero Section */}
       <div className="hero-section">
         <Container>
           <Row className="align-items-center">
@@ -100,7 +75,6 @@ function HomePage() {
               <p className="lead mb-4">
                 Discover great places to eat, read reviews, and get AI-powered recommendations.
               </p>
-              {/* Main Search Bar */}
               <Form onSubmit={handleSearch}>
                 <InputGroup size="lg">
                   <Form.Control
@@ -109,11 +83,8 @@ function HomePage() {
                     onChange={(e) => setSearch(e.target.value)}
                     style={{ borderRadius: '30px 0 0 30px' }}
                   />
-                  <Button
-                    variant="dark"
-                    type="submit"
-                    style={{ borderRadius: '0 30px 30px 0' }}
-                  >
+                  <Button variant="dark" type="submit"
+                    style={{ borderRadius: '0 30px 30px 0' }}>
                     <FaSearch />
                   </Button>
                 </InputGroup>
@@ -125,34 +96,22 @@ function HomePage() {
 
       <Container>
         <Row>
-          {/* Left — Restaurant Listings */}
           <Col lg={8}>
-            {/* Filters Row */}
             <div className="d-flex gap-2 mb-4 flex-wrap align-items-center">
               <FaFilter className="text-muted" />
-              <Form.Select
-                size="sm"
-                style={{ width: 'auto' }}
-                value={cuisineFilter}
-                onChange={(e) => { setCuisineFilter(e.target.value); setPage(0); }}
-              >
+              <Form.Select size="sm" style={{ width: 'auto' }}
+                value={filters.cuisine_type}
+                onChange={e => dispatch(setFilters({ cuisine_type: e.target.value, page: 0 }))}>
                 <option value="">All Cuisines</option>
-                <option>Italian</option>
-                <option>Mexican</option>
-                <option>Chinese</option>
-                <option>Japanese</option>
-                <option>Indian</option>
-                <option>American</option>
-                <option>French</option>
-                <option>Mediterranean</option>
+                {['Italian','Mexican','Chinese','Japanese','Indian','American',
+                  'French','Mediterranean','Korean','Vietnamese','Spanish','Greek'].map(c => (
+                  <option key={c}>{c}</option>
+                ))}
               </Form.Select>
 
-              <Form.Select
-                size="sm"
-                style={{ width: 'auto' }}
-                value={priceFilter}
-                onChange={(e) => { setPriceFilter(e.target.value); setPage(0); }}
-              >
+              <Form.Select size="sm" style={{ width: 'auto' }}
+                value={filters.price_tier}
+                onChange={e => dispatch(setFilters({ price_tier: e.target.value, page: 0 }))}>
                 <option value="">Any Price</option>
                 <option value="$">$ Budget</option>
                 <option value="$$">$$ Moderate</option>
@@ -160,33 +119,24 @@ function HomePage() {
                 <option value="$$$$">$$$$ Fine Dining</option>
               </Form.Select>
 
-              <Form.Control
-                size="sm"
-                placeholder="City..."
+              <Form.Control size="sm" placeholder="City..."
                 style={{ width: '130px' }}
-                value={cityFilter}
-                onChange={(e) => { setCityFilter(e.target.value); setPage(0); }}
-              />
+                value={filters.city}
+                onChange={e => dispatch(setFilters({ city: e.target.value, page: 0 }))} />
 
-              {(search || cuisineFilter || priceFilter || cityFilter) && (
-                <Button
-                  variant="outline-secondary"
-                  size="sm"
-                  onClick={handleClearFilters}
-                >
+              {(search || filters.cuisine_type || filters.price_tier || filters.city) && (
+                <Button variant="outline-secondary" size="sm"
+                  onClick={handleClearFilters}>
                   Clear ✕
                 </Button>
               )}
-
               <span className="text-muted ms-auto" style={{ fontSize: '0.85rem' }}>
-                {totalCount} restaurant{totalCount !== 1 ? 's' : ''} found
+                {total} restaurant{total !== 1 ? 's' : ''} found
               </span>
             </div>
 
-            {/* Error */}
             {error && <Alert variant="danger">{error}</Alert>}
 
-            {/* Loading */}
             {loading ? (
               <div className="loading-container">
                 <Spinner animation="border" variant="danger" />
@@ -207,7 +157,7 @@ function HomePage() {
                     <Col key={restaurant.id} md={6} xl={4}>
                       <RestaurantCard
                         restaurant={restaurant}
-                        isFavorite={favorites.includes(restaurant.id)}
+                        isFavorite={favoriteIds.includes(restaurant.id)}
                         onToggleFavorite={handleToggleFavorite}
                         showFavorite={!!user}
                       />
@@ -215,26 +165,19 @@ function HomePage() {
                   ))}
                 </Row>
 
-                {/* Pagination */}
                 {totalPages > 1 && (
                   <div className="d-flex justify-content-center gap-2 mt-4">
-                    <Button
-                      variant="outline-danger"
-                      size="sm"
-                      disabled={page === 0}
-                      onClick={() => setPage(p => p - 1)}
-                    >
+                    <Button variant="outline-danger" size="sm"
+                      disabled={filters.page === 0}
+                      onClick={() => dispatch(setFilters({ page: filters.page - 1 }))}>
                       ← Previous
                     </Button>
                     <span className="align-self-center text-muted">
-                      Page {page + 1} of {totalPages}
+                      Page {filters.page + 1} of {totalPages}
                     </span>
-                    <Button
-                      variant="outline-danger"
-                      size="sm"
-                      disabled={page >= totalPages - 1}
-                      onClick={() => setPage(p => p + 1)}
-                    >
+                    <Button variant="outline-danger" size="sm"
+                      disabled={filters.page >= totalPages - 1}
+                      onClick={() => dispatch(setFilters({ page: filters.page + 1 }))}>
                       Next →
                     </Button>
                   </div>
@@ -243,7 +186,6 @@ function HomePage() {
             )}
           </Col>
 
-          {/* Right — AI Chatbot */}
           <Col lg={4}>
             <div style={{ position: 'sticky', top: '80px' }}>
               <AIChatbot />

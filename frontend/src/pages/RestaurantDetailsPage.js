@@ -1,4 +1,3 @@
-import RestaurantPhotos from '../components/RestaurantPhotos';
 import React, { useState, useEffect } from 'react';
 import {
   Container, Row, Col, Card, Badge, Button,
@@ -9,21 +8,34 @@ import {
   FaHeart, FaRegHeart, FaStar, FaPhone,
   FaGlobe, FaMapMarkerAlt, FaClock, FaEdit, FaTrash
 } from 'react-icons/fa';
+import { useDispatch, useSelector } from 'react-redux';
 import {
-  getRestaurant, getReviews, createReview, updateReview,
-  deleteReview, addFavorite, removeFavorite, getMyFavorites
+  fetchReviews, addReview, editReview, removeReview,
+  selectReviews, clearReviews
+} from '../store/slices/reviewSlice';
+import {
+  fetchRestaurantById, selectSelectedRestaurant,
+  clearSelected
+} from '../store/slices/restaurantSlice';
+import {
+  getRestaurant, getMyFavorites,
+  addFavorite, removeFavorite
 } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import StarRating from '../components/StarRating';
+import RestaurantPhotos from '../components/RestaurantPhotos';
 
 function RestaurantDetailsPage() {
   const { id }       = useParams();
   const { user }     = useAuth();
   const navigate     = useNavigate();
+  const dispatch     = useDispatch();
 
-  // Data state
-  const [restaurant, setRestaurant]   = useState(null);
-  const [reviews, setReviews]         = useState([]);
+  // Redux state
+  const restaurant   = useSelector(selectSelectedRestaurant);
+  const reviews      = useSelector(selectReviews);
+
+  // Local state
   const [isFavorite, setIsFavorite]   = useState(false);
   const [loading, setLoading]         = useState(true);
   const [error, setError]             = useState('');
@@ -36,22 +48,17 @@ function RestaurantDetailsPage() {
   const [editingReview, setEditingReview]   = useState(null);
 
   // Delete modal state
-  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showDeleteModal, setShowDeleteModal]   = useState(false);
   const [deletingReviewId, setDeletingReviewId] = useState(null);
 
-  // Fetch restaurant + reviews + favorites
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
+      setError('');
       try {
-        const [restaurantRes, reviewsRes] = await Promise.all([
-          getRestaurant(id),
-          getReviews(id)
-        ]);
-        setRestaurant(restaurantRes.data);
-        setReviews(reviewsRes.data);
+        await dispatch(fetchRestaurantById(id));
+        await dispatch(fetchReviews(id));
 
-        // Check if favorited
         if (user) {
           const favRes = await getMyFavorites();
           const favIds = favRes.data.map(f => f.restaurant_id);
@@ -64,7 +71,13 @@ function RestaurantDetailsPage() {
       }
     };
     fetchData();
-  }, [id, user]);
+
+    // Clear on unmount
+    return () => {
+      dispatch(clearSelected());
+      dispatch(clearReviews());
+    };
+  }, [id, user, dispatch]);
 
   const handleToggleFavorite = async () => {
     if (!user) return navigate('/login');
@@ -87,26 +100,29 @@ function RestaurantDetailsPage() {
     setReviewLoading(true);
     try {
       if (editingReview) {
-        // Update existing review
-        const res = await updateReview(id, editingReview.id, reviewForm);
-        setReviews(prev =>
-          prev.map(r => r.id === editingReview.id ? res.data : r)
-        );
-        // Refresh restaurant to get updated avg_rating
-        const rRes = await getRestaurant(id);
-        setRestaurant(rRes.data);
+        await dispatch(editReview({
+          restaurantId: id,
+          reviewId: editingReview.id,
+          data: reviewForm
+        }));
+        // Refresh restaurant for updated avg_rating
+        await dispatch(fetchRestaurantById(id));
       } else {
-        // Create new review
-        const res = await createReview(id, reviewForm);
-        setReviews(prev => [res.data, ...prev]);
-        const rRes = await getRestaurant(id);
-        setRestaurant(rRes.data);
+        const result = await dispatch(addReview({
+          restaurantId: id,
+          data: reviewForm
+        }));
+        if (addReview.rejected.match(result)) {
+          setReviewError(result.payload || 'Failed to submit review');
+          return;
+        }
+        await dispatch(fetchRestaurantById(id));
       }
       setShowReviewForm(false);
       setEditingReview(null);
       setReviewForm({ rating: 5, comment: '' });
     } catch (err) {
-      setReviewError(err.response?.data?.detail || 'Failed to submit review');
+      setReviewError('Failed to submit review');
     } finally {
       setReviewLoading(false);
     }
@@ -120,10 +136,11 @@ function RestaurantDetailsPage() {
 
   const handleDeleteReview = async () => {
     try {
-      await deleteReview(id, deletingReviewId);
-      setReviews(prev => prev.filter(r => r.id !== deletingReviewId));
-      const rRes = await getRestaurant(id);
-      setRestaurant(rRes.data);
+      await dispatch(removeReview({
+        restaurantId: id,
+        reviewId: deletingReviewId
+      }));
+      await dispatch(fetchRestaurantById(id));
     } catch (err) {
       console.error(err);
     } finally {
@@ -147,9 +164,9 @@ function RestaurantDetailsPage() {
     </div>
   );
 
-  if (error) return (
+  if (error || !restaurant) return (
     <Container className="mt-5">
-      <Alert variant="danger">{error}</Alert>
+      <Alert variant="danger">{error || 'Restaurant not found.'}</Alert>
       <Button variant="outline-danger" onClick={() => navigate('/')}>
         ← Back to Explore
       </Button>
@@ -169,25 +186,25 @@ function RestaurantDetailsPage() {
         padding: '40px 0'
       }}>
         <Container>
-                <div className="d-flex gap-2 mb-3">
-        <Button
-            variant="outline-light"
-            size="sm"
-            onClick={() => navigate('/')}
-        >
-            ← Back to Explore
-        </Button>
-        {/* Show Edit button only to the restaurant creator */}
-        {user && restaurant.owner_id === user.id && (
+          <div className="d-flex gap-2 mb-3">
             <Button
-            variant="warning"
-            size="sm"
-            onClick={() => navigate(`/restaurants/${id}/edit`)}
+              variant="outline-light"
+              size="sm"
+              onClick={() => navigate('/')}
             >
-            ✏️ Edit Restaurant
+              ← Back to Explore
             </Button>
-        )}
-        </div>
+            {user && restaurant.owner_id === user.id && (
+              <Button
+                variant="warning"
+                size="sm"
+                onClick={() => navigate(`/restaurants/${id}/edit`)}
+              >
+                ✏️ Edit Restaurant
+              </Button>
+            )}
+          </div>
+
           <Row className="align-items-center">
             <Col md={8}>
               <div className="d-flex align-items-center gap-3 mb-2">
@@ -246,7 +263,7 @@ function RestaurantDetailsPage() {
 
       <Container className="mt-4">
         <Row>
-          {/* Left Column — Details & Reviews */}
+          {/* Left Column */}
           <Col lg={8}>
 
             {/* Description */}
@@ -258,15 +275,16 @@ function RestaurantDetailsPage() {
                 </Card.Body>
               </Card>
             )}
-            {/* Photos Section */}
+
+            {/* Photos */}
             <Card className="mb-4 border-0 shadow-sm">
-            <Card.Body>
+              <Card.Body>
                 <h5 className="mb-3">📷 Photos</h5>
                 <RestaurantPhotos
-                restaurantId={parseInt(id)}
-                ownerId={restaurant.owner_id}
+                  restaurantId={parseInt(id)}
+                  ownerId={restaurant.owner_id}
                 />
-            </Card.Body>
+              </Card.Body>
             </Card>
 
             {/* Amenities */}
@@ -301,7 +319,9 @@ function RestaurantDetailsPage() {
                             size={28}
                             color={star <= reviewForm.rating ? '#f5a623' : '#ccc'}
                             style={{ cursor: 'pointer' }}
-                            onClick={() => setReviewForm(f => ({ ...f, rating: star }))}
+                            onClick={() =>
+                              setReviewForm(f => ({ ...f, rating: star }))
+                            }
                           />
                         ))}
                         <span className="text-muted ms-2">
@@ -336,6 +356,7 @@ function RestaurantDetailsPage() {
                       <Button
                         variant="outline-secondary"
                         onClick={handleCancelReview}
+                        type="button"
                       >
                         Cancel
                       </Button>
@@ -349,9 +370,7 @@ function RestaurantDetailsPage() {
             <Card className="border-0 shadow-sm">
               <Card.Body>
                 <div className="d-flex justify-content-between align-items-center mb-3">
-                  <h5 className="mb-0">
-                    Reviews ({reviews.length})
-                  </h5>
+                  <h5 className="mb-0">Reviews ({reviews.length})</h5>
                   {user && !userReview && !showReviewForm && (
                     <Button
                       variant="outline-danger"
@@ -374,8 +393,10 @@ function RestaurantDetailsPage() {
                       <div className="d-flex justify-content-between align-items-start">
                         <div>
                           <div className="d-flex align-items-center gap-2 mb-1">
-                            <div className="profile-pic-placeholder"
-                              style={{ width: 36, height: 36, fontSize: '1rem' }}>
+                            <div
+                              className="profile-pic-placeholder"
+                              style={{ width: 36, height: 36, fontSize: '1rem' }}
+                            >
                               {review.user_name?.[0]?.toUpperCase() || '?'}
                             </div>
                             <div>
@@ -393,7 +414,6 @@ function RestaurantDetailsPage() {
                           )}
                         </div>
 
-                        {/* Edit/Delete — only for review author */}
                         {user?.id === review.user_id && (
                           <div className="d-flex gap-1">
                             <Button
@@ -496,22 +516,23 @@ function RestaurantDetailsPage() {
                   <h5 className="mb-3">Rating Breakdown</h5>
                   {[5, 4, 3, 2, 1].map(star => {
                     const count = reviews.filter(r => r.rating === star).length;
-                    const pct   = reviews.length > 0
+                    const pct = reviews.length > 0
                       ? Math.round((count / reviews.length) * 100)
                       : 0;
                     return (
-                      <div key={star} className="d-flex align-items-center gap-2 mb-1">
-                        <span style={{ width: 20, fontSize: '0.85rem' }}>{star}★</span>
+                      <div key={star}
+                        className="d-flex align-items-center gap-2 mb-1">
+                        <span style={{ width: 20, fontSize: '0.85rem' }}>
+                          {star}★
+                        </span>
                         <div className="flex-grow-1 bg-light rounded"
                           style={{ height: 8 }}>
-                          <div
-                            style={{
-                              width: `${pct}%`,
-                              height: '100%',
-                              background: '#f5a623',
-                              borderRadius: 4
-                            }}
-                          />
+                          <div style={{
+                            width: `${pct}%`,
+                            height: '100%',
+                            background: '#f5a623',
+                            borderRadius: 4
+                          }} />
                         </div>
                         <span style={{ width: 30, fontSize: '0.8rem', color: '#999' }}>
                           {count}

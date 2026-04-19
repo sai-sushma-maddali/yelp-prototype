@@ -3,8 +3,8 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 const AuthContext = createContext();
 
 export function AuthProvider({ children }) {
-  const [user, setUser]   = useState(null);
-  const [token, setToken] = useState(null);
+  const [user, setUser]     = useState(null);
+  const [token, setToken]   = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -18,13 +18,13 @@ export function AuthProvider({ children }) {
   }, []);
 
   const login = (userData, accessToken) => {
-    setUser(userData);
-    setToken(accessToken);
+    // Save to localStorage FIRST before setting state
     localStorage.setItem('token', accessToken);
     localStorage.setItem('user', JSON.stringify(userData));
+    setUser(userData);
+    setToken(accessToken);
   };
 
-  // Call this after profile pic upload to update navbar instantly
   const updateProfilePic = (picUrl) => {
     const updatedUser = { ...user, profile_pic: picUrl };
     setUser(updatedUser);

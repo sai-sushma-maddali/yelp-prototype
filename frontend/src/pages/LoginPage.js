@@ -1,15 +1,21 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, Form, Button, Alert, Container } from 'react-bootstrap';
 import { Link, useNavigate } from 'react-router-dom';
+import { useDispatch, useSelector } from 'react-redux';
+import { loginUser, selectAuthError, selectAuthLoading, clearError } from '../store/slices/authSlice';
 import { useAuth } from '../context/AuthContext';
-import { login as loginApi } from '../services/api';
 
 function LoginPage() {
   const [formData, setFormData] = useState({ email: '', password: '' });
-  const [error, setError]       = useState('');
-  const [loading, setLoading]   = useState(false);
-  const { login }               = useAuth();
-  const navigate                = useNavigate();
+  const dispatch  = useDispatch();
+  const navigate  = useNavigate();
+  const { login } = useAuth();
+  const loading   = useSelector(selectAuthLoading);
+  const error     = useSelector(selectAuthError);
+
+  useEffect(() => {
+    dispatch(clearError());
+  }, [dispatch]);
 
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -17,19 +23,12 @@ function LoginPage() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setError('');
-    setLoading(true);
-    try {
-      const res = await loginApi(formData);
-      const { access_token, role, user_id, name } = res.data;
+    const result = await dispatch(loginUser(formData));
+    if (loginUser.fulfilled.match(result)) {
+      const { access_token, role, user_id, name } = result.payload;
       login({ id: user_id, name, role }, access_token);
-      // Redirect based on role
       if (role === 'owner') navigate('/owner/dashboard');
       else navigate('/');
-    } catch (err) {
-      setError(err.response?.data?.detail || 'Invalid email or password');
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -48,33 +47,23 @@ function LoginPage() {
             <Form.Group className="mb-3">
               <Form.Label>Email Address</Form.Label>
               <Form.Control
-                type="email"
-                name="email"
+                type="email" name="email"
                 placeholder="john@example.com"
                 value={formData.email}
-                onChange={handleChange}
-                required
+                onChange={handleChange} required
               />
             </Form.Group>
-
             <Form.Group className="mb-4">
               <Form.Label>Password</Form.Label>
               <Form.Control
-                type="password"
-                name="password"
+                type="password" name="password"
                 placeholder="Enter your password"
                 value={formData.password}
-                onChange={handleChange}
-                required
+                onChange={handleChange} required
               />
             </Form.Group>
-
-            <Button
-              variant="danger"
-              type="submit"
-              className="w-100"
-              disabled={loading}
-            >
+            <Button variant="danger" type="submit"
+              className="w-100" disabled={loading}>
               {loading ? 'Logging in...' : 'Log In'}
             </Button>
           </Form>
@@ -82,9 +71,7 @@ function LoginPage() {
           <hr />
           <p className="text-center mb-0">
             Don't have an account?{' '}
-            <Link to="/signup" style={{ color: '#d32323' }}>
-              Sign up
-            </Link>
+            <Link to="/signup" style={{ color: '#d32323' }}>Sign up</Link>
           </p>
         </Card.Body>
       </Card>

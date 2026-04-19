@@ -1,6 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
-import shutil
-import uuid
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from typing import Optional
@@ -12,7 +10,13 @@ from app.schemas.restaurant import (
     RestaurantResponse, RestaurantListResponse
 )
 from app.services.dependencies import get_current_user
+from app.services.kafka_producer import (
+    publish_restaurant_created,
+    publish_restaurant_updated
+)
 import os
+import uuid
+import shutil
 
 router = APIRouter(prefix="/restaurants", tags=["Restaurants"])
 
@@ -31,25 +35,34 @@ def create_restaurant(
     db.add(restaurant)
     db.commit()
     db.refresh(restaurant)
+
+    # Publish to Kafka
+    publish_restaurant_created(
+        restaurant_id=restaurant.id,
+        name=restaurant.name,
+        cuisine_type=restaurant.cuisine_type,
+        city=restaurant.city,
+        owner_id=current_user.id
+    )
+
     return restaurant
 
 
 # --- List / Search Restaurants ---
 @router.get("", response_model=RestaurantListResponse)
 def list_restaurants(
-    name: Optional[str] = Query(None, description="Search by restaurant name"),
-    cuisine_type: Optional[str] = Query(None, description="Filter by cuisine type"),
-    city: Optional[str] = Query(None, description="Filter by city"),
-    zip_code: Optional[str] = Query(None, description="Filter by zip code"),
-    price_tier: Optional[str] = Query(None, description="Filter by price tier e.g. $, $$"),
-    keywords: Optional[str] = Query(None, description="Search in description and amenities"),
-    skip: int = Query(0, description="Pagination offset"),
-    limit: int = Query(10, description="Number of results per page"),
+    name: Optional[str]         = Query(None),
+    cuisine_type: Optional[str] = Query(None),
+    city: Optional[str]         = Query(None),
+    zip_code: Optional[str]     = Query(None),
+    price_tier: Optional[str]   = Query(None),
+    keywords: Optional[str]     = Query(None),
+    skip: int                   = Query(0),
+    limit: int                  = Query(10),
     db: Session = Depends(get_db)
 ):
     query = db.query(Restaurant)
 
-    # Apply filters
     if name:
         query = query.filter(Restaurant.name.ilike(f"%{name}%"))
     if cuisine_type:
@@ -111,7 +124,6 @@ def update_restaurant(
             detail="Restaurant not found"
         )
 
-    # Only owner or the user who created it can update
     if restaurant.owner_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -124,6 +136,14 @@ def update_restaurant(
 
     db.commit()
     db.refresh(restaurant)
+
+    # Publish to Kafka
+    publish_restaurant_updated(
+        restaurant_id=restaurant.id,
+        name=restaurant.name,
+        owner_id=current_user.id
+    )
+
     return restaurant
 
 
@@ -144,7 +164,6 @@ def delete_restaurant(
             detail="Restaurant not found"
         )
 
-    # Only the creator can delete
     if restaurant.owner_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -167,15 +186,15 @@ def get_my_restaurants(
     ).all()
     return RestaurantListResponse(total=len(restaurants), restaurants=restaurants)
 
+
 # --- Upload Restaurant Photo ---
 @router.post("/{restaurant_id}/photos", status_code=status.HTTP_201_CREATED)
 def upload_restaurant_photo(
     restaurant_id: int,
-    file: UploadFile = File(...),
+    file: __import__('fastapi').UploadFile = __import__('fastapi').File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # Check restaurant exists
     restaurant = db.query(Restaurant).filter(
         Restaurant.id == restaurant_id
     ).first()
@@ -185,14 +204,12 @@ def upload_restaurant_photo(
             detail="Restaurant not found"
         )
 
-    # Check ownership
     if restaurant.owner_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only the restaurant owner can upload photos"
         )
 
-    # Validate file extension
     filename_lower = file.filename.lower()
     allowed_extensions = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif']
     if not any(filename_lower.endswith(ext) for ext in allowed_extensions):
@@ -201,7 +218,6 @@ def upload_restaurant_photo(
             detail="Only image files are allowed"
         )
 
-    # Save file
     upload_dir = f"uploads/restaurant_photos/{restaurant_id}"
     os.makedirs(upload_dir, exist_ok=True)
     ext = file.filename.split(".")[-1].lower()
@@ -211,7 +227,6 @@ def upload_restaurant_photo(
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    # Save to DB
     from app.models.restaurant_photo import RestaurantPhoto
     photo = RestaurantPhoto(
         restaurant_id=restaurant_id,
@@ -289,7 +304,6 @@ def delete_restaurant_photo(
             detail="Photo not found"
         )
 
-    # Delete file from disk
     file_path = photo.photo_url.lstrip("/")
     if os.path.exists(file_path):
         os.remove(file_path)
