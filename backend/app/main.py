@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi import Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import auth, users, restaurants, reviews, favorites, owner, ai_assistant
@@ -8,20 +9,38 @@ import os
 
 app = FastAPI(title="Yelp Prototype API", version="1.0.0")
 
+ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://yelp-lab2-seera-frontend-72664250.s3-website-us-east-1.amazonaws.com",
+    "http://yelp-lab2-seera-frontend-72664250.s3-website.us-east-1.amazonaws.com",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
-    allow_credentials=True,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["*"]
+    expose_headers=["*"],
+    allow_private_network=True,
 )
+
+
+@app.middleware("http")
+async def private_network_cors(request: Request, call_next):
+    response = await call_next(request)
+    # Needed by modern browsers when a public origin calls localhost/private-network APIs.
+    if request.headers.get("access-control-request-private-network") == "true":
+        response.headers["Access-Control-Allow-Private-Network"] = "true"
+    return response
 
 @app.on_event("startup")
 async def startup_db():
     await connect_to_mongo()
-    # Start Kafka worker services in background
-    start_all_workers()
+    # Start Kafka worker services in background (skip in pytest / CI without broker)
+    if os.getenv("SKIP_KAFKA_WORKERS", "").lower() not in ("1", "true", "yes"):
+        start_all_workers()
 
 @app.on_event("shutdown")
 async def shutdown_db():

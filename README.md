@@ -308,7 +308,7 @@ FastAPI (Producer) → Kafka Topic → Worker Service (Consumer) → Database
 
 ---
 
-##  Roadmap
+## Roadmap
 
 - [x] User authentication (JWT)
 - [x] User profile & photo upload
@@ -322,7 +322,48 @@ FastAPI (Producer) → Kafka Topic → Worker Service (Consumer) → Database
 - [x] Kafka producer/consumer integration
 - [x] MongoDB migration + session storage
 - [x] JMeter performance testing
-- [ ] Docker + Kubernetes + AWS deployment
+- [x] Docker + Kubernetes manifests for multi-service deployment
+- [ ] AWS deployment screenshots/evidence
+
+---
+
+## Lab 2 Rubric Progress Tracker
+
+- [x] Part 1.1 Dockerfiles for service APIs
+- [x] Part 1.2 `docker-compose.yml` runs local stack (MySQL, MongoDB, Kafka, APIs)
+- [x] Part 1.2 Kubernetes manifests for Kafka/Zookeeper + app/data services
+- [ ] Part 1.2 AWS running-service screenshots
+- [x] Part 2 Kafka setup and topic creation
+- [x] Part 2 producer integration in review/restaurant/user flows
+- [x] Part 2 worker services auto-start
+- [ ] Part 2 producer-consumer architecture diagram in report
+- [x] Part 3 migration script for all core entities to MongoDB
+- [x] Part 3 sessions stored in MongoDB with TTL index
+- [x] Part 3 bcrypt password hashes preserved
+- [x] Part 4 Redux store + slices
+- [x] Part 5 JMeter test plan file
+- [ ] Part 5 response-time graph + written analysis in report
+
+---
+
+## Kubernetes Quick Start (Local)
+
+Apply infrastructure:
+
+```bash
+kubectl apply -f k8s/kafka/zookeeper.yaml
+kubectl apply -f k8s/kafka/kafka.yaml
+kubectl apply -f k8s/kafka/kafka-topics.yaml
+kubectl apply -f k8s/data-services.yaml
+kubectl apply -f k8s/app-services.yaml
+```
+
+Verify running services:
+
+```bash
+kubectl get pods
+kubectl get svc
+```
 
 ---
 

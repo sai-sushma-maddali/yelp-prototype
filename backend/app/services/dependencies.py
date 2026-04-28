@@ -1,16 +1,14 @@
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from sqlalchemy.orm import Session
-from app.database import get_db
 from app.services.auth import decode_access_token
-from app.models.user import User
+from app.mongodb import get_mongo_db
+from types import SimpleNamespace
 
 security = HTTPBearer()
 
-def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: Session = Depends(get_db)
-) -> User:
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Invalid or expired token",
@@ -24,13 +22,18 @@ def get_current_user(
     if user_id is None:
         raise credentials_exception
 
-    user = db.query(User).filter(User.id == int(user_id)).first()
+    mongo = get_mongo_db()
+    if mongo is None:
+        raise credentials_exception
+
+    user = await mongo.users.find_one({"_id": int(user_id)})
     if user is None:
         raise credentials_exception
 
-    return user
+    user["id"] = user.pop("_id")
+    return SimpleNamespace(**user)
 
-def get_current_owner(current_user: User = Depends(get_current_user)) -> User:
+async def get_current_owner(current_user=Depends(get_current_user)):
     if current_user.role != "owner":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

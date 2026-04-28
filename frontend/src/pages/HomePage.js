@@ -36,7 +36,7 @@ function HomePage() {
     dispatch(fetchRestaurants({
       skip:  filters.page * LIMIT,
       limit: LIMIT,
-      ...(filters.name         && { name:         filters.name }),
+      ...(filters.name         && { keywords:     filters.name }),
       ...(filters.cuisine_type && { cuisine_type: filters.cuisine_type }),
       ...(filters.price_tier   && { price_tier:   filters.price_tier }),
       ...(filters.city         && { city:          filters.city }),

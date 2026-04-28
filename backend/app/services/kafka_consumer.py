@@ -3,15 +3,23 @@ from sqlalchemy.orm import Session
 from app.database import SessionLocal
 import json
 import logging
+import os
 import threading
 
 logger = logging.getLogger(__name__)
+
+
+def _bootstrap_servers():
+    raw = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092").strip()
+    hosts = [h.strip() for h in raw.split(",") if h.strip()]
+    return hosts or ["localhost:9092"]
+
 
 def get_consumer(topics: list):
     try:
         consumer = KafkaConsumer(
             *topics,
-            bootstrap_servers=['localhost:9092'],
+            bootstrap_servers=_bootstrap_servers(),
             value_deserializer=lambda v: json.loads(v.decode('utf-8')),
             key_deserializer=lambda k: k.decode('utf-8') if k else None,
             group_id='yelp-worker-group',

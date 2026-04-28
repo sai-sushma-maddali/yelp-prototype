@@ -1,0 +1,51 @@
+# Single FastAPI (app.main) behind a LoadBalancer — use this URL as REACT_APP_API_URL for S3-hosted frontend.
+# Prereq: build and push image:
+#   docker build -t 177044824844.dkr.ecr.us-east-1.amazonaws.com/yelp/full-api:latest -f backend/Dockerfile backend
+#   docker push 177044824844.dkr.ecr.us-east-1.amazonaws.com/yelp/full-api:latest
+# Also: aws ecr create-repository --repository-name yelp/full-api --region us-east-1
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: full-api
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: full-api
+  template:
+    metadata:
+      labels:
+        app: full-api
+    spec:
+      containers:
+      - name: full-api
+        image: 177044824844.dkr.ecr.us-east-1.amazonaws.com/yelp/full-api:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+        envFrom:
+        - configMapRef:
+            name: yelp-app-config
+        - secretRef:
+            name: yelp-ai-secrets
+            optional: true
+        env:
+        - name: SECRET_KEY
+          value: "eks-lab-secret-replace-for-production"
+        - name: SKIP_KAFKA_WORKERS
+          value: "1"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: full-api-lb
+  namespace: default
+spec:
+  type: LoadBalancer
+  selector:
+    app: full-api
+  ports:
+  - port: 80
+    targetPort: 8000
+    protocol: TCP

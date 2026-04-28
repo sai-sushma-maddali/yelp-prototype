@@ -1,24 +1,34 @@
 from kafka import KafkaProducer
 import json
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
 producer = None
+
+
+def _bootstrap_servers():
+    raw = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092").strip()
+    hosts = [h.strip() for h in raw.split(",") if h.strip()]
+    return hosts or ["localhost:9092"]
+
 
 def get_producer():
     global producer
     if producer is None:
         try:
             producer = KafkaProducer(
-    bootstrap_servers=['localhost:9092'],
-    value_serializer=lambda v: json.dumps(v, default=str).encode('utf-8'),
-    key_serializer=lambda k: k.encode('utf-8') if k else None,
-    acks='all',
-    retries=3,
-    request_timeout_ms=15000,
-    metadata_max_age_ms=5000
-)
+                bootstrap_servers=_bootstrap_servers(),
+                value_serializer=lambda v: json.dumps(v, default=str).encode("utf-8"),
+                key_serializer=lambda k: k.encode("utf-8") if k else None,
+                acks="all",
+                retries=3,
+                request_timeout_ms=15000,
+                metadata_max_age_ms=5000,
+                max_block_ms=2000,
+                delivery_timeout_ms=5000,
+            )
             logger.info("Kafka producer connected successfully")
         except Exception as e:
             logger.error(f"Failed to connect to Kafka: {e}")
@@ -32,8 +42,10 @@ def publish_event(topic: str, key: str, data: dict):
         if p is None:
             logger.warning(f"Kafka not available — skipping event: {topic}")
             return False
-        p.send(topic, key=key, value=data)
-        p.flush()
+        # Avoid blocking request threads when Kafka is unreachable.
+        # We still attempt delivery, but fail fast if brokers are down.
+        future = p.send(topic, key=key, value=data)
+        future.get(timeout=3)
         logger.info(f"Published to {topic}: {data}")
         return True
     except Exception as e:

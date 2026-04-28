@@ -1,11 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
-from sqlalchemy.orm import Session
-from app.database import get_db
-from app.models.user import User
-from app.models.user_preference import UserPreference
 from app.schemas.user import UserProfileUpdate, UserResponse
 from app.schemas.preference import PreferenceUpdate, PreferenceResponse
 from app.services.dependencies import get_current_user
+from app.mongodb import get_mongo_db
+from app.services.mongo_repo import normalize_doc, get_next_id, now_utc
 import shutil
 import os
 import uuid
@@ -18,34 +16,36 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # --- Get Profile ---
 @router.get("/profile", response_model=UserResponse)
-def get_profile(current_user: User = Depends(get_current_user)):
-    return current_user
+async def get_profile(current_user=Depends(get_current_user)):
+    return normalize_doc({"_id": current_user.id, **current_user.__dict__})
 
 
 # --- Update Profile ---
 @router.put("/profile", response_model=UserResponse)
-def update_profile(
+async def update_profile(
     payload: UserProfileUpdate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user=Depends(get_current_user)
 ):
+    mongo = get_mongo_db()
     # Only update fields that were actually sent
     update_data = payload.model_dump(exclude_unset=True)
-    for field, value in update_data.items():
-        setattr(current_user, field, value)
-
-    db.commit()
-    db.refresh(current_user)
-    return current_user
+    if update_data:
+        update_data["updated_at"] = now_utc()
+        await mongo.users.update_one(
+            {"_id": current_user.id},
+            {"$set": update_data}
+        )
+    updated_user = await mongo.users.find_one({"_id": current_user.id})
+    return normalize_doc(updated_user)
 
 
 # --- Upload Profile Picture ---
 @router.post("/profile/picture", response_model=UserResponse)
-def upload_profile_picture(
+async def upload_profile_picture(
     file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user=Depends(get_current_user)
 ):
+    mongo = get_mongo_db()
     # Print for debugging
     print(f"Uploaded file: {file.filename}, content_type: {file.content_type}")
 
@@ -74,51 +74,53 @@ def upload_profile_picture(
             os.remove(old_path)
 
     # Save path to DB
-    current_user.profile_pic = "/" + file_path.replace("\\", "/")
-    db.commit()
-    db.refresh(current_user)
-    return current_user
+    await mongo.users.update_one(
+        {"_id": current_user.id},
+        {"$set": {"profile_pic": "/" + file_path.replace("\\", "/"), "updated_at": now_utc()}}
+    )
+    updated_user = await mongo.users.find_one({"_id": current_user.id})
+    return normalize_doc(updated_user)
 
 
 # --- Get Preferences ---
 @router.get("/preferences", response_model=PreferenceResponse)
-def get_preferences(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+async def get_preferences(
+    current_user=Depends(get_current_user)
 ):
-    prefs = db.query(UserPreference).filter(
-        UserPreference.user_id == current_user.id
-    ).first()
+    mongo = get_mongo_db()
+    prefs = await mongo.user_preferences.find_one({"user_id": current_user.id})
 
     if not prefs:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No preferences found. Please set your preferences first."
         )
-    return prefs
+    return normalize_doc(prefs)
 
 
 # --- Set / Update Preferences ---
 @router.put("/preferences", response_model=PreferenceResponse)
-def update_preferences(
+async def update_preferences(
     payload: PreferenceUpdate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user=Depends(get_current_user)
 ):
-    prefs = db.query(UserPreference).filter(
-        UserPreference.user_id == current_user.id
-    ).first()
+    mongo = get_mongo_db()
+    prefs = await mongo.user_preferences.find_one({"user_id": current_user.id})
+    update_data = payload.model_dump(exclude_unset=True)
 
     if not prefs:
-        # Create new preferences if none exist
-        prefs = UserPreference(user_id=current_user.id)
-        db.add(prefs)
+        pref_id = await get_next_id(mongo, "user_preferences")
+        prefs = {
+            "_id": pref_id,
+            "user_id": current_user.id,
+            **update_data,
+        }
+        await mongo.user_preferences.insert_one(prefs)
+    else:
+        await mongo.user_preferences.update_one(
+            {"_id": prefs["_id"]},
+            {"$set": update_data}
+        )
+        prefs = await mongo.user_preferences.find_one({"_id": prefs["_id"]})
 
-    # Update only fields that were sent
-    update_data = payload.model_dump(exclude_unset=True)
-    for field, value in update_data.items():
-        setattr(prefs, field, value)
-
-    db.commit()
-    db.refresh(prefs)
-    return prefs
+    return normalize_doc(prefs)

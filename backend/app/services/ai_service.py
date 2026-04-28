@@ -1,288 +1,239 @@
+import os
+import re
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langchain_ollama import ChatOllama
 from langchain_tavily import TavilySearch
-from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
-from sqlalchemy.orm import Session
-from app.models.user_preference import UserPreference
-from app.models.restaurant import Restaurant
-from sqlalchemy import or_
-import os
 from dotenv import load_dotenv
 
 load_dotenv()
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL    = os.getenv("OLLAMA_MODEL", "llama3.2:latest")
-TAVILY_API_KEY  = os.getenv("TAVILY_API_KEY")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:latest")
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
-# Initialize Ollama
-llm = ChatOllama(
-    model=OLLAMA_MODEL,
-    base_url=OLLAMA_BASE_URL,
-    temperature=0.7
-)
-
-# Initialize Tavily search (only if key is available)
+llm = ChatOllama(model=OLLAMA_MODEL, base_url=OLLAMA_BASE_URL, temperature=0.7)
 search_tool = None
 if TAVILY_API_KEY:
     os.environ["TAVILY_API_KEY"] = TAVILY_API_KEY
     search_tool = TavilySearch(max_results=3)
 
 
-def get_user_preferences(user_id: int, db: Session) -> dict:
-    """Load user preferences from database"""
-    prefs = db.query(UserPreference).filter(
-        UserPreference.user_id == user_id
-    ).first()
+def _build_short_reason(user_message: str, restaurant: dict) -> str:
+    query = (user_message or "").lower()
+    cuisine = (restaurant.get("cuisine_type") or "").strip()
+    city = (restaurant.get("city") or "").strip()
+    rating = restaurant.get("avg_rating", 0)
+    reviews = restaurant.get("review_count", 0)
+    price = (restaurant.get("price_tier") or "").strip()
+    reason_parts = []
+    if cuisine and cuisine.lower() in query:
+        reason_parts.append(f"matches your {cuisine} preference")
+    if city and city.lower() in query:
+        reason_parts.append(f"in {city}")
+    if price and price in query:
+        reason_parts.append(f"fits your {price} budget")
+    if rating and rating >= 4.0:
+        reason_parts.append(f"highly rated ({rating}★)")
+    if reviews and reviews >= 20:
+        reason_parts.append(f"popular with {reviews} reviews")
+    if not reason_parts:
+        return f"Solid pick based on your request with {rating}★ rating."
+    return f"This place {' and '.join(reason_parts)}."
 
+
+def format_bullet_recommendations(user_message: str, restaurants: list) -> str:
+    if not restaurants:
+        return "- No exact match found right now.\n- Try a broader query (cuisine, city, or budget) for better suggestions."
+    lines = ["Top picks for you:"]
+    for r in restaurants[:3]:
+        lines.append(
+            f"- {r['name']} ({r.get('cuisine_type', 'Mixed')} | {r.get('price_tier', 'N/A')} | {r.get('avg_rating', 0)}★): {_build_short_reason(user_message, r)}"
+        )
+    return "\n".join(lines)
+
+
+async def get_user_preferences(user_id: int, mongo) -> dict:
+    prefs = await mongo.user_preferences.find_one({"user_id": user_id})
     if not prefs:
         return {}
-
     return {
-        "cuisine_preferences": prefs.cuisine_preferences or "any",
-        "price_range":         prefs.price_range or "any",
-        "preferred_location":  prefs.preferred_location or "any",
-        "dietary_needs":       prefs.dietary_needs or "none",
-        "ambiance":            prefs.ambiance or "any",
-        "sort_preference":     prefs.sort_preference or "rating"
+        "cuisine_preferences": prefs.get("cuisine_preferences") or "any",
+        "price_range": prefs.get("price_range") or "any",
+        "preferred_location": prefs.get("preferred_location") or "any",
+        "dietary_needs": prefs.get("dietary_needs") or "none",
+        "ambiance": prefs.get("ambiance") or "any",
+        "sort_preference": prefs.get("sort_preference") or "rating",
     }
 
 
-def search_restaurants(db: Session, filters: dict) -> list:
-    """Search restaurants in the database based on extracted filters"""
-    query = db.query(Restaurant)
-
+async def search_restaurants(mongo, filters: dict) -> list:
+    query = {}
     if filters.get("cuisine_type"):
-        query = query.filter(
-            Restaurant.cuisine_type.ilike(f"%{filters['cuisine_type']}%")
-        )
+        query["cuisine_type"] = {"$regex": filters["cuisine_type"], "$options": "i"}
     if filters.get("city"):
-        query = query.filter(
-            Restaurant.city.ilike(f"%{filters['city']}%")
-        )
+        query["city"] = {"$regex": filters["city"], "$options": "i"}
     if filters.get("price_tier"):
-        query = query.filter(
-            Restaurant.price_tier == filters["price_tier"]
-        )
+        query["price_tier"] = filters["price_tier"]
     if filters.get("keywords"):
         kw = filters["keywords"]
-        query = query.filter(
-            or_(
-                Restaurant.description.ilike(f"%{kw}%"),
-                Restaurant.amenities.ilike(f"%{kw}%"),
-                Restaurant.cuisine_type.ilike(f"%{kw}%"),
-                Restaurant.name.ilike(f"%{kw}%")
-            )
-        )
+        tokens = [re.escape(t) for t in re.findall(r"[a-zA-Z0-9$]+", kw) if len(t) > 1]
+        keyword_pattern = "|".join(tokens) if tokens else re.escape(kw)
+        query["$or"] = [
+            {"description": {"$regex": keyword_pattern, "$options": "i"}},
+            {"amenities": {"$regex": keyword_pattern, "$options": "i"}},
+            {"cuisine_type": {"$regex": keyword_pattern, "$options": "i"}},
+            {"name": {"$regex": keyword_pattern, "$options": "i"}},
+        ]
+    cursor = mongo.restaurants.find(query)
+    if filters.get("sort_by", "rating") == "popularity":
+        cursor = cursor.sort("review_count", -1)
+    else:
+        cursor = cursor.sort("avg_rating", -1)
+    restaurants = await cursor.limit(5).to_list(length=5)
+    # If strict filters find nothing, fall back to top-rated restaurants so
+    # conversational prompts like "find dinner tonight" still return suggestions.
+    if not restaurants:
+        fallback_query = {}
+        q = (filters.get("keywords") or "").lower()
+        if "romantic" in q or "date" in q:
+            fallback_query["$or"] = [
+                {"amenities": {"$regex": "romantic|reservations|bar", "$options": "i"}},
+                {"description": {"$regex": "romantic|fine dining|candle", "$options": "i"}},
+            ]
+        elif "vegan" in q or "vegetarian" in q:
+            fallback_query["$or"] = [
+                {"amenities": {"$regex": "vegan|vegetarian", "$options": "i"}},
+                {"description": {"$regex": "vegan|vegetarian|plant-based", "$options": "i"}},
+            ]
+        elif "cheap" in q or "budget" in q or "$" in q:
+            fallback_query["price_tier"] = "$"
+        elif "fine" in q or "fancy" in q or "luxury" in q:
+            fallback_query["price_tier"] = "$$$"
 
-    # Sort results
-    sort_by = filters.get("sort_by", "rating")
-    if sort_by == "rating":
-        query = query.order_by(Restaurant.avg_rating.desc())
-    elif sort_by == "popularity":
-        query = query.order_by(Restaurant.review_count.desc())
-
-    restaurants = query.limit(5).all()
-
+        restaurants = await mongo.restaurants.find(fallback_query).sort("avg_rating", -1).limit(5).to_list(length=5)
+        if not restaurants:
+            restaurants = await mongo.restaurants.find({}).sort("avg_rating", -1).limit(5).to_list(length=5)
     return [
         {
-            "id":           r.id,
-            "name":         r.name,
-            "cuisine_type": r.cuisine_type,
-            "city":         r.city,
-            "price_tier":   r.price_tier,
-            "avg_rating":   r.avg_rating,
-            "review_count": r.review_count,
-            "description":  r.description,
-            "amenities":    r.amenities,
-            "address":      r.address,
-            "phone":        r.phone
+            "id": r["_id"],
+            "name": r.get("name"),
+            "cuisine_type": r.get("cuisine_type"),
+            "city": r.get("city"),
+            "price_tier": r.get("price_tier"),
+            "avg_rating": r.get("avg_rating", 0),
+            "review_count": r.get("review_count", 0),
+            "description": r.get("description"),
+            "amenities": r.get("amenities"),
+            "address": r.get("address"),
+            "phone": r.get("phone"),
         }
         for r in restaurants
     ]
 
 
 def extract_filters_from_message(user_message: str, preferences: dict) -> dict:
-    """
-    Use Ollama to extract structured filters from a natural language query.
-    Returns a dict with cuisine_type, price_tier, keywords, city, sort_by.
-    """
-    system_prompt = """You are a filter extraction assistant. 
-Extract search filters from the user's restaurant query and return ONLY a JSON object.
-
-Return this exact JSON format (use null for missing values):
-{
-  "cuisine_type": "Italian" or null,
-  "price_tier": "$" or "$$" or "$$$" or "$$$$" or null,
-  "keywords": "vegan romantic outdoor wifi" or null,
-  "city": "San Jose" or null,
-  "sort_by": "rating" or "popularity" or "price"
-}
-
-Examples:
-- "vegan food" → {"cuisine_type": null, "price_tier": null, "keywords": "vegan", "city": null, "sort_by": "rating"}
-- "cheap Italian in San Jose" → {"cuisine_type": "Italian", "price_tier": "$", "keywords": null, "city": "San Jose", "sort_by": "price"}
-- "romantic dinner" → {"cuisine_type": null, "price_tier": null, "keywords": "romantic", "city": null, "sort_by": "rating"}
-
-Return ONLY the JSON object. No explanation."""
-
-    user_prompt = f"""User query: {user_message}
-User preferences: cuisine={preferences.get('cuisine_preferences')}, price={preferences.get('price_range')}, location={preferences.get('preferred_location')}, dietary={preferences.get('dietary_needs')}
-
-Extract filters as JSON:"""
-
+    system_prompt = """You are a filter extraction assistant.
+Extract filters and return ONLY JSON:
+{"cuisine_type":null,"price_tier":null,"keywords":null,"city":null,"sort_by":"rating"}"""
+    user_prompt = f"User query: {user_message}\nPreferences: {preferences}\nExtract JSON:"
     try:
-        response = llm.invoke([
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=user_prompt)
-        ])
-
+        response = llm.invoke([SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)])
         import json
         import re
-
-        # Extract JSON from response
         text = response.content.strip()
-        json_match = re.search(r'\{.*\}', text, re.DOTALL)
-        if json_match:
-            filters = json.loads(json_match.group())
-            # Apply user preferences as fallback
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            filters = json.loads(match.group())
             if not filters.get("city") and preferences.get("preferred_location"):
                 filters["city"] = preferences["preferred_location"].split(",")[0].strip()
             if not filters.get("sort_by"):
                 filters["sort_by"] = preferences.get("sort_preference", "rating")
             return filters
-    except Exception as e:
-        print(f"Filter extraction error: {e}")
+    except Exception:
+        pass
 
-    # Fallback — apply user preferences directly
+    query = (user_message or "").lower()
+    detected_cuisine = None
+    for cuisine in [
+        "italian", "mexican", "chinese", "japanese", "indian", "american",
+        "french", "mediterranean", "korean", "vietnamese", "spanish", "greek",
+    ]:
+        if cuisine in query:
+            detected_cuisine = cuisine
+            break
+
+    detected_price = None
+    for tier in ["$$$$", "$$$", "$$", "$"]:
+        if tier in query:
+            detected_price = tier
+            break
+
     return {
-        "city":     preferences.get("preferred_location", "").split(",")[0].strip() or None,
-        "sort_by":  preferences.get("sort_preference", "rating"),
-        "keywords": user_message[:100]
+        "cuisine_type": detected_cuisine.title() if detected_cuisine else None,
+        "price_tier": detected_price,
+        "city": preferences.get("preferred_location", "").split(",")[0].strip() or None,
+        "sort_by": preferences.get("sort_preference", "rating"),
+        "keywords": user_message[:100] if not detected_cuisine else None,
     }
 
 
 def get_web_context(query: str) -> str:
-    """Use Tavily to search for additional context about restaurants"""
     if not search_tool:
         return ""
     try:
         results = search_tool.invoke({"query": f"restaurants {query}"})
         if results:
             return "\n".join([r.get("content", "")[:200] for r in results[:2]])
-    except Exception as e:
-        print(f"Tavily search error: {e}")
+    except Exception:
+        return ""
     return ""
 
 
-def build_recommendation_prompt(
-    user_message: str,
-    preferences: dict,
-    restaurants: list,
-    web_context: str,
-    conversation_history: list
-) -> list:
-    """Build the full message list for Ollama"""
-
-    # Format restaurants for the prompt
-    if restaurants:
-        restaurant_list = "\n".join([
-            f"{i+1}. {r['name']} | {r['cuisine_type']} | {r['price_tier']} | "
-            f"Rating: {r['avg_rating']}★ ({r['review_count']} reviews) | "
-            f"{r['city']} | {r.get('description', '')[:80]}"
-            for i, r in enumerate(restaurants)
-        ])
-    else:
-        restaurant_list = "No restaurants found matching the criteria."
-
-    system_prompt = f"""You are a friendly and knowledgeable restaurant assistant for a Yelp-like platform. 
-Your job is to help users discover restaurants and make dining decisions.
-
-USER PREFERENCES:
-- Favorite cuisines: {preferences.get('cuisine_preferences', 'not set')}
-- Price preference: {preferences.get('price_range', 'not set')}
-- Dietary needs: {preferences.get('dietary_needs', 'none')}
-- Preferred ambiance: {preferences.get('ambiance', 'not set')}
-- Location: {preferences.get('preferred_location', 'not set')}
-
-AVAILABLE RESTAURANTS FROM DATABASE:
+def build_recommendation_prompt(user_message: str, preferences: dict, restaurants: list, web_context: str, conversation_history: list) -> list:
+    restaurant_list = "\n".join([
+        f"{i+1}. {r['name']} | {r['cuisine_type']} | {r['price_tier']} | Rating: {r['avg_rating']}★ ({r['review_count']} reviews) | {r['city']}"
+        for i, r in enumerate(restaurants)
+    ]) if restaurants else "No restaurants found matching the criteria."
+    system_prompt = f"""You are a friendly restaurant assistant.
+USER PREFERENCES: {preferences}
+AVAILABLE RESTAURANTS:
 {restaurant_list}
-
 {'ADDITIONAL WEB CONTEXT: ' + web_context if web_context else ''}
-
 INSTRUCTIONS:
-- Recommend from the database restaurants above
-- Personalise recommendations based on user preferences
-- Be conversational, warm and helpful — not robotic
-- For each recommendation explain WHY it matches the user's query
-- If no restaurants match, say so honestly and suggest what they could search for
-- Keep responses concise — 3-5 sentences per recommendation
-- Always mention the restaurant name, rating, price tier and why it fits"""
-
+- Recommend ONLY from database restaurants above
+- DO NOT write paragraphs
+- Max 4 bullet points
+- Format exactly:
+Top picks for you:
+- <Restaurant> (<Cuisine> | <Price> | <Rating>★): <One short reason>"""
     messages = [SystemMessage(content=system_prompt)]
-
-    # Add conversation history
-    for msg in conversation_history[-6:]:  # last 6 messages for context
+    for msg in conversation_history[-6:]:
         if msg["role"] == "user":
             messages.append(HumanMessage(content=msg["content"]))
         elif msg["role"] == "assistant":
             messages.append(AIMessage(content=msg["content"]))
-
-    # Add current message
     messages.append(HumanMessage(content=user_message))
     return messages
 
 
-async def process_chat(
-    user_message: str,
-    conversation_history: list,
-    user_id: int,
-    db: Session
-) -> dict:
-    """
-    Main function that orchestrates the entire chatbot flow:
-    1. Load user preferences
-    2. Extract filters from message
-    3. Search restaurants in DB
-    4. Get web context (Tavily)
-    5. Generate response with Ollama
-    """
+async def process_chat(user_message: str, conversation_history: list, user_id: int, mongo) -> dict:
     try:
-        # Step 1 - Load user preferences
-        preferences = get_user_preferences(user_id, db)
-
-        # Step 2 - Extract search filters from the message
+        preferences = await get_user_preferences(user_id, mongo)
         filters = extract_filters_from_message(user_message, preferences)
-        print(f"Extracted filters: {filters}")
-
-        # Step 3 - Search restaurants in DB
-        restaurants = search_restaurants(db, filters)
-        print(f"Found {len(restaurants)} restaurants")
-
-        # Step 4 - Get web context if Tavily is available
+        restaurants = await search_restaurants(mongo, filters)
         web_context = get_web_context(user_message)
-
-        # Step 5 - Build prompt and generate response
-        messages = build_recommendation_prompt(
-            user_message,
-            preferences,
-            restaurants,
-            web_context,
-            conversation_history
-        )
-
-        response = llm.invoke(messages)
-        ai_response = response.content.strip()
-
+        messages = build_recommendation_prompt(user_message, preferences, restaurants, web_context, conversation_history)
+        try:
+            response = llm.invoke(messages)
+            ai_response = response.content.strip()
+        except Exception:
+            ai_response = format_bullet_recommendations(user_message, restaurants)
+        if "-" not in ai_response or len(ai_response) > 800:
+            ai_response = format_bullet_recommendations(user_message, restaurants)
+        return {"response": ai_response, "restaurants": restaurants, "filters_used": filters}
+    except Exception:
         return {
-            "response":    ai_response,
-            "restaurants": restaurants,
-            "filters_used": filters
-        }
-
-    except Exception as e:
-        print(f"Chat error: {e}")
-        return {
-            "response": "I'm sorry, I ran into an issue processing your request. Please try again.",
+            "response": "- I could not run advanced AI ranking right now.\n- Try again, or use cuisine/city/price filters while I use basic matching.",
             "restaurants": [],
-            "filters_used": {}
+            "filters_used": {},
         }

@@ -1,0 +1,165 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: yelp-app-config
+  namespace: default
+data:
+  DB_HOST: mysql
+  DB_PORT: "3306"
+  DB_NAME: yelp_db
+  DB_USER: root
+  DB_PASSWORD: root
+  MONGO_URL: mongodb://mongo:27017
+  MONGO_DB: yelp_db_mongo
+  KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user-api
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: user-api
+  template:
+    metadata:
+      labels:
+        app: user-api
+    spec:
+      containers:
+      - name: user-api
+        image: 177044824844.dkr.ecr.us-east-1.amazonaws.com/yelp/user-api:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8001
+        envFrom:
+        - configMapRef:
+            name: yelp-app-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: user-api
+  namespace: default
+spec:
+  selector:
+    app: user-api
+  ports:
+  - port: 8001
+    targetPort: 8001
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: restaurant-api
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: restaurant-api
+  template:
+    metadata:
+      labels:
+        app: restaurant-api
+    spec:
+      containers:
+      - name: restaurant-api
+        image: 177044824844.dkr.ecr.us-east-1.amazonaws.com/yelp/restaurant-api:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8002
+        envFrom:
+        - configMapRef:
+            name: yelp-app-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: restaurant-api
+  namespace: default
+spec:
+  selector:
+    app: restaurant-api
+  ports:
+  - port: 8002
+    targetPort: 8002
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: review-api
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: review-api
+  template:
+    metadata:
+      labels:
+        app: review-api
+    spec:
+      containers:
+      - name: review-api
+        image: 177044824844.dkr.ecr.us-east-1.amazonaws.com/yelp/review-api:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8003
+        envFrom:
+        - configMapRef:
+            name: yelp-app-config
+        env:
+        - name: SKIP_KAFKA_WORKERS
+          value: "1"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: review-api
+  namespace: default
+spec:
+  selector:
+    app: review-api
+  ports:
+  - port: 8003
+    targetPort: 8003
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: restaurant-owner-api
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: restaurant-owner-api
+  template:
+    metadata:
+      labels:
+        app: restaurant-owner-api
+    spec:
+      containers:
+      - name: restaurant-owner-api
+        image: 177044824844.dkr.ecr.us-east-1.amazonaws.com/yelp/restaurant-owner-api:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8004
+        envFrom:
+        - configMapRef:
+            name: yelp-app-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: restaurant-owner-api
+  namespace: default
+spec:
+  selector:
+    app: restaurant-owner-api
+  ports:
+  - port: 8004
+    targetPort: 8004

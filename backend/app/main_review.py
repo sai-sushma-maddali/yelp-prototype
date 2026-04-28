@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.routers import reviews
 from app.mongodb import connect_to_mongo, close_mongo_connection
 from app.services.kafka_consumer import start_all_workers
+import os
 
 app = FastAPI(title="Review API Service", version="1.0.0")
 
@@ -17,7 +18,8 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup():
     await connect_to_mongo()
-    start_all_workers()
+    if os.getenv("SKIP_KAFKA_WORKERS", "").lower() not in ("1", "true", "yes"):
+        start_all_workers()
 
 @app.on_event("shutdown")
 async def shutdown():
